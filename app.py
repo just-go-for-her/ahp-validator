@@ -7,29 +7,16 @@ import google.generativeai as genai
 st.set_page_config(page_title="AHP 논리 정밀 진단기", page_icon="⚖️", layout="wide")
 
 # --------------------------------------------------------------------------
-# 2. API 키 인증 처리 (하이브리드 방식)
+# 2. 인증 및 모델 설정 (Secrets 우선, 없으면 입력창)
 # --------------------------------------------------------------------------
-# 시스템 설계자(당신)를 위한 자동 로그인 로직
 api_key = None
-
-# 1순위: Streamlit Secrets(비밀금고)에서 키를 찾음
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
-
-# 2순위: Secrets에 없으면 사이드바에서 입력받음 (백업용)
 else:
     with st.sidebar:
         st.header("🔐 인증 설정")
-        api_key = st.text_input(
-            "Google API Key", 
-            type="password",
-            placeholder="비밀 금고에 키가 없습니다.",
-            help="Streamlit Secrets 설정을 완료하면 이 입력창은 사라집니다."
-        )
+        api_key = st.text_input("Google API Key", type="password", placeholder="API Key 입력")
 
-# --------------------------------------------------------------------------
-# 3. 모델 설정
-# --------------------------------------------------------------------------
 if api_key:
     try:
         genai.configure(api_key=api_key)
@@ -38,50 +25,47 @@ if api_key:
         st.error(f"키 설정 오류: {e}")
         st.stop()
 else:
-    # 키가 없으면 화면을 가리고 안내 메시지 출력
-    st.warning("⚠️ 시스템을 가동하려면 API 키가 필요합니다.")
-    st.info("💡 **설계자 팁:** Streamlit Cloud > Settings > Secrets 에 키를 등록하면 자동 로그인됩니다.")
+    st.warning("⚠️ API 키가 필요합니다. (Secrets 등록 또는 사이드바 입력)")
     st.stop()
 
 # --------------------------------------------------------------------------
-# 4. AI 분석 함수 (등급/요약/제안/예시/상세)
+# 3. AI 분석 함수 (성격: 깐깐함 -> 객관적)
 # --------------------------------------------------------------------------
 def analyze_ahp_logic(goal, parent, children):
     if not children:
         return {
-            "grade": "정보없음",
-            "summary": "하위 항목이 없습니다.",
-            "suggestion": "항목을 추가해주세요.",
-            "example": "추천 없음",
-            "detail": "분석할 데이터가 없습니다."
+            "grade": "정보없음", "summary": "하위 항목 없음", 
+            "suggestion": "항목 추가 필요", "example": "추천 없음", "detail": "데이터 없음"
         }
     
+    # [수정된 프롬프트] 잘된 것은 '양호'를 주도록 명시
     prompt = f"""
     [역할] AHP 논리 진단 컨설턴트
     [대상] 목표: {goal} / 상위: {parent} / 하위: {children}
     
     [지침]
-    1. AHP 이론(독립성, MECE, 7±2 원칙)에 맞춰 냉철하게 평가하라.
-    2. **반드시 수정된 '모범 항목 리스트'를 구체적인 단어로 추천하라.**
+    1. 독립성(인과관계 X), MECE(중복/누락 X), 계층구조 적절성을 평가하라.
+    2. **중요:** 현재 구조가 논리적으로 타당하다면 억지로 비판하지 말고 **'양호'** 등급을 부여하라.
+    3. '양호'일 경우, [EXAMPLE]에는 현재 입력된 항목들을 그대로 적거나 약간만 다듬어서 제시하라.
+    4. 문제가 있을 때만 '주의'나 '위험'을 주고 구체적인 대안을 제시하라.
     
     [답변 양식]
     [GRADE]
-    (양호, 주의, 위험 중 하나)
+    (양호, 주의, 위험 중 하나만 작성)
     [SUMMARY]
-    (핵심 문제점 3줄 요약)
+    (핵심 평가 3줄 요약)
     [SUGGESTION]
-    (가장 시급한 조치사항 1줄)
+    (가장 시급한 조치사항 1줄, 양호하면 '현재 구조 유지' 등으로 작성)
     [EXAMPLE]
-    (가장 이상적인 하위 항목 구성 예시 3~5개 나열)
+    (가장 이상적인 항목 리스트 3~5개)
     [DETAIL]
-    (상세 논리 분석)
+    (논리적 분석 근거)
     """
     
     try:
         response = model.generate_content(prompt)
         text = response.text
         
-        # 기본값 설정
         data = {
             "grade": "정보없음", "summary": "정보 없음", 
             "suggestion": "정보 없음", "example": "추천 없음", "detail": text
@@ -106,10 +90,10 @@ def analyze_ahp_logic(goal, parent, children):
         return data
 
     except Exception as e:
-        return {"grade": "에러", "summary": "통신 오류", "suggestion": "", "example": "", "detail": str(e)}
+        return {"grade": "에러", "summary": "오류 발생", "suggestion": "", "example": "", "detail": str(e)}
 
 # --------------------------------------------------------------------------
-# 5. 결과 UI 렌더링
+# 4. UI 렌더링
 # --------------------------------------------------------------------------
 def render_result_ui(title, data, count_msg=""):
     grade = data['grade']
@@ -117,7 +101,7 @@ def render_result_ui(title, data, count_msg=""):
         icon, color, bg = "🚨", "red", "#fee"
     elif "주의" in grade:
         icon, color, bg = "⚠️", "orange", "#fffae5"
-    else:
+    else: # 양호
         icon, color, bg = "✅", "green", "#eff"
 
     with st.container(border=True):
@@ -129,8 +113,16 @@ def render_result_ui(title, data, count_msg=""):
         st.divider()
         st.markdown("**📋 핵심 요약**")
         st.markdown(data['summary'])
-        st.markdown(f"**💡 조치 제안:** {data['suggestion']}")
         
+        # 제안 박스 (양호일 땐 초록색)
+        if "양호" in grade:
+            st.success(f"💡 **제안:** {data['suggestion']}")
+        elif "위험" in grade:
+            st.error(f"💡 **제안:** {data['suggestion']}")
+        else:
+            st.warning(f"💡 **제안:** {data['suggestion']}")
+        
+        # 추천 예시 (양호일 때도 보여줌 - 확신을 주기 위해)
         if "없음" not in data['example']:
             st.markdown(f"""
             <div style="background-color: {bg}; padding: 15px; border-radius: 10px; margin: 10px 0;">
@@ -145,22 +137,21 @@ def render_result_ui(title, data, count_msg=""):
             st.write(data['detail'])
 
 # --------------------------------------------------------------------------
-# 6. 메인 로직
+# 5. 메인 로직
 # --------------------------------------------------------------------------
 if 'main_count' not in st.session_state: st.session_state.main_count = 1 
 if 'sub_counts' not in st.session_state: st.session_state.sub_counts = {}
 
-# 사이드바 설명 (키 입력창 제거됨 - Secrets 사용 시)
 with st.sidebar:
     st.info("💡 **리포트 구조**\n1. 요약 (3줄)\n2. 제안 (1줄)\n3. **추천 (모범답안)**\n4. 상세")
 
 st.title("⚖️ AHP 논리 진단 리포트 (Pro)")
-st.caption("AI가 오류를 진단하고, **가장 적절한 대체 항목 예시**까지 추천해줍니다.")
+st.caption("AI가 오류를 진단하고, 적절한 경우 **양호** 등급과 함께 구조 유지를 제안합니다.")
 st.divider()
 
 col_goal, _ = st.columns([2, 1])
 with col_goal:
-    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 전투기 도입")
+    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 소총 선정")
 
 if goal:
     st.subheader("1. 기준 설정")
@@ -190,7 +181,7 @@ if goal:
 
         st.divider()
         if st.button("🚀 AI 진단 및 추천 받기", type="primary", use_container_width=True):
-            with st.spinner("AI가 최적의 항목을 구성하고 있습니다..."):
+            with st.spinner("AI가 분석 중입니다..."):
                 res_main = analyze_ahp_logic(goal, goal, main_criteria)
                 render_result_ui(f"1차 기준: {goal}", res_main)
                 for p, c in structure_data.items():
