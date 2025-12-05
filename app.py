@@ -1,5 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
+import re  # [NEW] 정규표현식 모듈 추가 (텍스트 추출 강화)
 
 # --------------------------------------------------------------------------
 # 1. 페이지 설정
@@ -7,7 +8,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="AHP 논리 정밀 진단기", page_icon="⚖️", layout="wide")
 
 # --------------------------------------------------------------------------
-# 2. 인증 및 모델 설정 (Secrets 우선, 없으면 입력창)
+# 2. 인증 설정
 # --------------------------------------------------------------------------
 api_key = None
 if "GOOGLE_API_KEY" in st.secrets:
@@ -15,7 +16,7 @@ if "GOOGLE_API_KEY" in st.secrets:
 else:
     with st.sidebar:
         st.header("🔐 인증 설정")
-        api_key = st.text_input("Google API Key", type="password", placeholder="API Key 입력")
+        api_key = st.text_input("Google API Key", type="password")
 
 if api_key:
     try:
@@ -25,11 +26,11 @@ if api_key:
         st.error(f"키 설정 오류: {e}")
         st.stop()
 else:
-    st.warning("⚠️ API 키가 필요합니다. (Secrets 등록 또는 사이드바 입력)")
+    st.warning("⚠️ API 키가 필요합니다.")
     st.stop()
 
 # --------------------------------------------------------------------------
-# 3. AI 분석 함수 (성격: 깐깐함 -> 객관적)
+# 3. AI 분석 함수 (정규표현식으로 무조건 추출)
 # --------------------------------------------------------------------------
 def analyze_ahp_logic(goal, parent, children):
     if not children:
@@ -38,71 +39,68 @@ def analyze_ahp_logic(goal, parent, children):
             "suggestion": "항목 추가 필요", "example": "추천 없음", "detail": "데이터 없음"
         }
     
-    # [수정된 프롬프트] 잘된 것은 '양호'를 주도록 명시
+    # [강화된 프롬프트] 무조건 예시를 쓰라고 압박
     prompt = f"""
     [역할] AHP 논리 진단 컨설턴트
     [대상] 목표: {goal} / 상위: {parent} / 하위: {children}
     
     [지침]
-    1. 독립성(인과관계 X), MECE(중복/누락 X), 계층구조 적절성을 평가하라.
-    2. **중요:** 현재 구조가 논리적으로 타당하다면 억지로 비판하지 말고 **'양호'** 등급을 부여하라.
-    3. '양호'일 경우, [EXAMPLE]에는 현재 입력된 항목들을 그대로 적거나 약간만 다듬어서 제시하라.
-    4. 문제가 있을 때만 '주의'나 '위험'을 주고 구체적인 대안을 제시하라.
+    1. 현재 구조가 논리적으로 '위험'하더라도, 사용자가 참고할 수 있는 **[EXAMPLE] (모범 답안)**을 무조건 작성하라.
+    2. 양호하다면 현재 항목을 그대로 예시로 들어라.
     
-    [답변 양식]
-    [GRADE]
-    (양호, 주의, 위험 중 하나만 작성)
-    [SUMMARY]
-    (핵심 평가 3줄 요약)
-    [SUGGESTION]
-    (가장 시급한 조치사항 1줄, 양호하면 '현재 구조 유지' 등으로 작성)
-    [EXAMPLE]
-    (가장 이상적인 항목 리스트 3~5개)
-    [DETAIL]
-    (논리적 분석 근거)
+    [필수 출력 태그] - 이 태그를 빠뜨리지 마시오.
+    [GRADE] (양호/주의/위험)
+    [SUMMARY] (3줄 요약)
+    [SUGGESTION] (1줄 제안)
+    [EXAMPLE] (수정된 모범 항목 리스트 3~5개, 불렛포인트 사용)
+    [DETAIL] (상세 분석)
     """
     
     try:
         response = model.generate_content(prompt)
         text = response.text
         
+        # [NEW] 정규표현식(Regex)을 이용한 안전한 파싱
+        # 태그가 중간에 섞여도 내용을 정확히 발라냅니다.
+        def extract_content(tag, text):
+            # [TAG]와 다음 [TAG] 사이의 내용을 찾음
+            pattern = fr"\[{tag}\](.*?)(?=\[|$)" 
+            match = re.search(pattern, text, re.DOTALL)
+            return match.group(1).strip() if match else "내용 없음"
+
         data = {
-            "grade": "정보없음", "summary": "정보 없음", 
-            "suggestion": "정보 없음", "example": "추천 없음", "detail": text
+            "grade": extract_content("GRADE", text),
+            "summary": extract_content("SUMMARY", text),
+            "suggestion": extract_content("SUGGESTION", text),
+            "example": extract_content("EXAMPLE", text),
+            "detail": extract_content("DETAIL", text)
         }
         
-        if "[GRADE]" in text:
-            parts = text.split("[GRADE]")
-            if len(parts) > 1:
-                temp = parts[1].split("[SUMMARY]")
-                data["grade"] = temp[0].strip()
-                if len(temp) > 1:
-                    temp2 = temp[1].split("[SUGGESTION]")
-                    data["summary"] = temp2[0].strip()
-                    if len(temp2) > 1:
-                        temp3 = temp2[1].split("[EXAMPLE]")
-                        data["suggestion"] = temp3[0].strip()
-                        if len(temp3) > 1:
-                            temp4 = temp3[1].split("[DETAIL]")
-                            data["example"] = temp4[0].strip()
-                            if len(temp4) > 1:
-                                data["detail"] = temp4[1].strip()
+        # 만약 Regex가 실패했을 경우를 대비한 안전장치
+        if data["grade"] == "내용 없음":
+            data["grade"] = "주의"
+            data["detail"] = text # 원문 전체 표시
+
         return data
 
     except Exception as e:
-        return {"grade": "에러", "summary": "오류 발생", "suggestion": "", "example": "", "detail": str(e)}
+        return {"grade": "에러", "summary": "오류", "suggestion": "", "example": "", "detail": str(e)}
 
 # --------------------------------------------------------------------------
 # 4. UI 렌더링
 # --------------------------------------------------------------------------
 def render_result_ui(title, data, count_msg=""):
     grade = data['grade']
+    
+    # 등급별 색상 처리
     if "위험" in grade:
         icon, color, bg = "🚨", "red", "#fee"
     elif "주의" in grade:
         icon, color, bg = "⚠️", "orange", "#fffae5"
-    else: # 양호
+    elif "양호" in grade:
         icon, color, bg = "✅", "green", "#eff"
+    else:
+        icon, color, bg = "❓", "gray", "#eee"
 
     with st.container(border=True):
         c1, c2 = st.columns([3, 1])
@@ -111,10 +109,11 @@ def render_result_ui(title, data, count_msg=""):
         
         if count_msg: st.caption(f":red[{count_msg}]")
         st.divider()
+        
         st.markdown("**📋 핵심 요약**")
         st.markdown(data['summary'])
         
-        # 제안 박스 (양호일 땐 초록색)
+        # 제안 (등급에 따라 색상 다르게)
         if "양호" in grade:
             st.success(f"💡 **제안:** {data['suggestion']}")
         elif "위험" in grade:
@@ -122,13 +121,13 @@ def render_result_ui(title, data, count_msg=""):
         else:
             st.warning(f"💡 **제안:** {data['suggestion']}")
         
-        # 추천 예시 (양호일 때도 보여줌 - 확신을 주기 위해)
-        if "없음" not in data['example']:
+        # [중요] 추천 예시 박스 (내용이 '없음'이 아닐 때만 출력)
+        if len(data['example']) > 5 and "없음" not in data['example']:
             st.markdown(f"""
-            <div style="background-color: {bg}; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                <strong style="color: {color};">✨ AI 추천 구성 (모범 답안)</strong>
-                <div style="margin-top: 5px; font-size: 0.95em;">
-                    {data['example'].replace('\n', '<br>')}
+            <div style="background-color: {bg}; padding: 15px; border-radius: 10px; margin: 10px 0; border: 1px solid {color};">
+                <strong style="color: {color};">✨ AI 추천 모범 답안</strong>
+                <div style="margin-top: 5px; font-size: 0.95em; white-space: pre-line;">
+                    {data['example']}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -146,12 +145,12 @@ with st.sidebar:
     st.info("💡 **리포트 구조**\n1. 요약 (3줄)\n2. 제안 (1줄)\n3. **추천 (모범답안)**\n4. 상세")
 
 st.title("⚖️ AHP 논리 진단 리포트 (Pro)")
-st.caption("AI가 오류를 진단하고, 적절한 경우 **양호** 등급과 함께 구조 유지를 제안합니다.")
+st.caption("AI가 오류를 진단하고, **반드시 모범 답안(Example)**을 제시합니다.")
 st.divider()
 
 col_goal, _ = st.columns([2, 1])
 with col_goal:
-    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 소총 선정")
+    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 전투기 도입")
 
 if goal:
     st.subheader("1. 기준 설정")
