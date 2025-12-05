@@ -1,135 +1,76 @@
 import streamlit as st
-import json
-import google.generativeai as genai
 
-# --- 1. 페이지 설정 ---
-st.set_page_config(
-    page_title="AHP 논리 진단기",
-    page_icon="🎓",
-    layout="wide"
-)
+# 페이지 설정
+st.set_page_config(page_title="직관적 의사결정 트리", layout="wide")
 
-st.title("🎓 AHP 연구 설계 자동 진단 솔루션")
-st.markdown("""
-이 도구는 **Gemini 2.5 AI**를 활용하여 AHP 계층 구조의 
-**수학적 오류(Miller's Law)**와 **논리적 오류(독립성, MECE)**를 실시간으로 진단합니다.
-""")
+st.title("🌳 직관적 의사결정 도우미 (Branch Mode)")
+st.markdown("복잡한 코드는 잊으세요. 빈칸을 채우면 생각이 정리됩니다.")
 
-# --- 2. 사이드바: 설정 ---
-with st.sidebar:
-    st.header("⚙️ 설정 (Settings)")
-    # 보안을 위해 API 키는 코드에 넣지 않고 화면에서 입력받습니다.
-    api_key = st.text_input(
-        "Google API Key 입력", 
-        type="password",
-        help="Google AI Studio에서 발급받은 키를 입력하세요. 저장은 되지 않습니다."
-    )
+# 1. 목표 설정
+st.subheader("1. 무엇을 결정하고 싶으신가요?")
+goal = st.text_input("목표를 입력하세요 (예: 국방 AI 시스템 도입)", placeholder="여기에 목표 입력")
+
+if goal:
+    st.divider()
+    st.subheader(f"2. '{goal}'을(를) 위한 핵심 기준 3가지")
+    st.info("가장 중요하게 생각하는 기준을 최대 3개만 적어주세요.")
+
+    # 1차 기준 입력 (3개의 컬럼으로 나누어 빈칸 제시)
+    col1, col2, col3 = st.columns(3)
     
-    st.info("💡 팁: 상위 항목 개수와 하위 항목의 논리적 관계를 중점적으로 봅니다.")
-    st.markdown("---")
-    st.caption("Developed by AHP Researcher")
+    with col1:
+        c1 = st.text_input("기준 1", placeholder="예: 작전효율성")
+    with col2:
+        c2 = st.text_input("기준 2", placeholder="예: 비용")
+    with col3:
+        c3 = st.text_input("기준 3", placeholder="예: 기술신뢰도")
 
-# --- 3. Gemini 분석 함수 ---
-def ask_gemini(model, parent, children):
-    prompt = f"""
-    [역할] AHP 방법론 전문가 (냉철한 분석가)
-    [분석 대상] 상위 기준: '{parent}' / 하위 요소들: {children}
-    [요청]
-    이 구조에서 다음 두 가지 오류를 분석하시오.
-    1. 독립성 위반 (인과관계가 섞여있는가?)
-    2. MECE 위반 (의미가 중복되거나, 치명적으로 누락되었는가?)
-    
-    답변 형식:
-    - 오류 발견 시: "🚨 **[오류 유형]**" 및 이유 설명
-    - 문제 없음: "✅ **통과**" 및 이유 설명
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"통신 에러: {e}"
+    # 입력된 기준들을 리스트로 정리
+    criteria_list = [c for c in [c1, c2, c3] if c] # 빈칸이 아닌 것만 가져오기
 
-# --- 4. 메인 화면 ---
-col1, col2 = st.columns([1, 1])
+    if criteria_list:
+        st.divider()
+        st.subheader("3. 세부 항목 가지치기 (+ 계층 추가)")
+        st.markdown("각 기준을 클릭하면 세부 항목(하위 가지)을 입력할 수 있는 빈칸이 나옵니다.")
 
-with col1:
-    st.subheader("📝 구조 입력 (JSON)")
-    
-    default_input = {
-        "name": "미래 국방 AI 시스템 도입",
-        "sub_criteria": [
-            {
-                "name": "작전 효율성",
-                "sub_criteria": [
-                    {"name": "타격 정밀도"}, {"name": "피아 식별 능력"}
-                ] 
-            },
-            {
-                "name": "비용",
-                "sub_criteria": [
-                    {"name": "초기 도입비"}
-                ]
-            }
-        ]
-    }
-    
-    json_str = st.text_area(
-        "계층 구조를 JSON 형태로 입력하세요:", 
-        value=json.dumps(default_input, indent=4, ensure_ascii=False),
-        height=500
-    )
+        # 입력된 각 기준에 대해 하위 항목 입력창 생성 (Expander 활용)
+        results = {} # 전체 구조를 저장할 딕셔너리
+        
+        for criterion in criteria_list:
+            # st.expander를 사용하여 '브랜치' 느낌 구현 (누르면 열림)
+            with st.expander(f"➕ '{criterion}'의 세부 항목 추가하기", expanded=True):
+                st.markdown(f"**{criterion}**을 구성하는 하위 요소 3가지는?")
+                
+                # 하위 항목도 3개로 제한 (컬럼 분리)
+                sub_c1, sub_c2, sub_c3 = st.columns(3)
+                
+                # key값을 유니크하게 주어야 에러가 안 남
+                s1 = sub_c1.text_input(f"{criterion}-세부1", placeholder="항목 1", label_visibility="collapsed")
+                s2 = sub_c2.text_input(f"{criterion}-세부2", placeholder="항목 2", label_visibility="collapsed")
+                s3 = sub_c3.text_input(f"{criterion}-세부3", placeholder="항목 3", label_visibility="collapsed")
+                
+                # 입력된 하위 항목 저장
+                sub_items = [s for s in [s1, s2, s3] if s]
+                results[criterion] = sub_items
 
-with col2:
-    st.subheader("📊 진단 리포트")
-    
-    if st.button("🚀 진단 시작", type="primary"):
-        if not api_key:
-            st.warning("⚠️ 왼쪽 사이드바에 API Key를 먼저 입력해주세요!")
-        else:
-            try:
-                # 데이터 파싱
-                data = json.loads(json_str)
-                
-                # Gemini 연결
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-2.5-flash') # 최신 모델 사용
-                
-                st.success("✅ 엔진 가동! 계층 구조를 스캔합니다...")
-                
-                # BFS 탐색으로 모든 노드 순회
-                queue = [data]
-                
-                while queue:
-                    node = queue.pop(0)
-                    node_name = node.get("name", "Unknown")
-                    children = node.get("sub_criteria", [])
-                    children_names = [c["name"] for c in children]
-                    
-                    if children:
-                        with st.expander(f"📂 분석 중: **{node_name}**", expanded=True):
-                            
-                            # [A] 구조적 진단
-                            if len(children) > 9:
-                                st.error(f"🔴 [구조 위험] 하위 요소가 {len(children)}개입니다. (Miller's Law 위반)")
-                            elif len(children) == 1:
-                                st.warning("🟡 [구조 주의] 하위 요소가 1개뿐입니다.")
-                            else:
-                                st.caption(f"🔵 구조 양호 ({len(children)}개 요소)")
-                            
-                            # [B] AI 논리 진단
-                            with st.spinner("AI가 논리를 분석하고 있습니다..."):
-                                feedback = ask_gemini(model, node_name, children_names)
-                                st.markdown("---")
-                                st.write(feedback)
-                        
-                        # 자식 노드 큐에 추가
-                        for child in children:
-                            queue.append(child)
-                            
-                st.balloons() # 축하 효과 🎉
-                st.success("모든 분석이 완료되었습니다.")
-                
-            except json.JSONDecodeError:
-                st.error("🚨 JSON 형식이 틀렸습니다. 괄호나 콤마를 확인하세요.")
-            except Exception as e:
-                st.error(f"❌ 에러 발생: {e}")
+        # 4. 최종 구조 확인
+        st.divider()
+        st.subheader("4. 완성된 구조 확인")
+        
+        # 시각적으로 보여주기 (JSON 대신 트리 형태로 텍스트 출력)
+        st.markdown(f"### 🎯 목표: {goal}")
+        for main_c, subs in results.items():
+            st.markdown(f"- **{main_c}**")
+            if subs:
+                for sub in subs:
+                    st.markdown(f"  - └ {sub}")
+            else:
+                st.markdown("  - (세부 항목 없음)")
+        
+        st.success("구조가 완성되었습니다! (다음 단계: 분석 시작하기)")
+
+    else:
+        st.warning("위의 빈칸에 기준을 하나 이상 입력해주세요.")
+
+else:
+    st.write("먼저 목표를 입력해주세요.")
