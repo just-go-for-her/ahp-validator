@@ -2,42 +2,9 @@ import streamlit as st
 import google.generativeai as genai
 
 # --------------------------------------------------------------------------
-# 1. 페이지 설정 및 디자인(CSS) 주입
+# 1. 페이지 설정
 # --------------------------------------------------------------------------
 st.set_page_config(page_title="AHP 논리 정밀 진단기", page_icon="⚖️", layout="wide")
-
-# 깔끔한 리포트 출력을 위한 커스텀 CSS
-st.markdown("""
-<style>
-    /* 전체 폰트 및 배경 설정 */
-    .report-card {
-        padding: 20px;
-        border-radius: 12px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .card-danger { background-color: #FFF5F5; border-left: 6px solid #FF4B4B; }
-    .card-warning { background-color: #FFFDF5; border-left: 6px solid #FFA421; }
-    .card-success { background-color: #F0FDF4; border-left: 6px solid #21C354; }
-    
-    .status-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-        font-size: 0.9em;
-        color: white;
-        margin-bottom: 10px;
-    }
-    .badge-danger { background-color: #FF4B4B; }
-    .badge-warning { background-color: #FFA421; }
-    .badge-success { background-color: #21C354; }
-
-    .card-title { font-size: 1.2em; font-weight: bold; color: #333; display: inline-block; margin-left: 10px;}
-    .section-title { font-weight: bold; color: #555; margin-top: 10px; margin-bottom: 5px; }
-    .content-text { color: #444; line-height: 1.6; }
-</style>
-""", unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------
 # 2. 사이드바 (API 키 설정)
@@ -50,13 +17,8 @@ with st.sidebar:
         placeholder="AIzaSy... 키를 입력하세요",
         help="Google AI Studio에서 발급받은 키를 입력하세요."
     )
-    st.markdown("---")
-    st.info("""
-    **💡 진단 포인트**
-    1. **독립성**: 항목 간 인과관계 여부
-    2. **MECE**: 중복되거나 빠진 내용 여부
-    3. **균형**: 항목 개수의 적절성 (7±2)
-    """)
+    st.divider()
+    st.info("💡 **진단 방식**\n- **요약**: 핵심 문제 3줄\n- **제안**: 개선 방향 1줄\n- **상세**: 클릭하여 확인")
 
 if api_key:
     try:
@@ -66,127 +28,140 @@ if api_key:
         st.error(f"키 설정 오류: {e}")
 
 # --------------------------------------------------------------------------
-# 3. AI 분석 함수 (구조적 출력 요청)
+# 3. AI 분석 함수 (데이터 파싱 로직 강화)
 # --------------------------------------------------------------------------
 def analyze_ahp_logic(goal, parent, children):
     if not children:
-        return {"status": "NONE", "text": "하위 항목이 없습니다."}
+        return {
+            "status": "NONE",
+            "summary": "하위 항목이 입력되지 않았습니다.",
+            "suggestion": "항목을 추가해주세요.",
+            "detail": "분석할 데이터가 없습니다."
+        }
     
-    # 디자인 적용을 위해 AI에게 명확한 포맷 요청
+    # AI에게 구분자(|)를 사용하여 명확하게 나누어 달라고 요청
     prompt = f"""
-    당신은 AHP 방법론 검증 전문가입니다.
-    
-    [분석 대상]
-    - 최종목표: {goal}
-    - 기준명: {parent}
-    - 하위요소: {children}
+    [역할] AHP 논리 진단 컨설턴트
+    [대상] 목표: {goal} / 상위: {parent} / 하위: {children}
+    [기준] 독립성, MECE, 개수 적정성
 
-    [진단 기준]
-    1. 독립성 위반 (인과관계가 섞였는가?)
-    2. MECE 위반 (중복되거나 누락되었는가?)
-    3. 논리적 타당성
-
-    [출력 형식]
-    반드시 아래 형식에 맞춰 답변하세요.
+    [출력 형식] - 아래 구분자(|)를 지켜서 출력할 것
+    등급|요약|제안|상세
     
-    등급: [양호/주의/위험]
-    한줄요약: (전체적인 평가를 15자 이내로 요약)
-    상세분석: (위반 사항이나 잘된 점을 구체적으로 설명, 줄바꿈 가능)
-    조치제안: (수정이 필요하다면 구체적인 대안 제시)
+    1. 등급: [양호/주의/위험] 중 하나만 작성
+    2. 요약: 핵심 진단 내용을 불렛포인트(-) 3개 이내로 간결하게 작성
+    3. 제안: 가장 시급한 개선책 1문장 작성
+    4. 상세: 논리적 근거와 구체적인 이유를 자세히 서술
     """
     
     try:
         response = model.generate_content(prompt)
-        return {"text": response.text}
+        text = response.text
+        
+        # 결과 파싱 (구분자로 나누기)
+        parts = text.split('|')
+        
+        # 형식이 깨졌을 경우를 대비한 예외처리
+        if len(parts) < 4:
+            return {
+                "status": "주의",
+                "summary": "AI 응답 형식이 불명확합니다.",
+                "suggestion": "다시 시도해주세요.",
+                "detail": text
+            }
+            
+        return {
+            "status": parts[0].replace("등급:", "").strip(),
+            "summary": parts[1].replace("요약:", "").strip(),
+            "suggestion": parts[2].replace("제안:", "").strip(),
+            "detail": parts[3].replace("상세:", "").strip()
+        }
+
     except Exception as e:
-        return {"text": f"통신 오류: {e}"}
+        return {"status": "에러", "summary": f"통신 오류: {e}", "suggestion": "", "detail": ""}
 
 # --------------------------------------------------------------------------
-# 4. 결과 카드 렌더링 함수 (HTML 생성기)
+# 4. 결과 UI 렌더링 함수 (접기/펼치기 적용)
 # --------------------------------------------------------------------------
-def render_result_card(title, result_text, count_msg=""):
-    # AI 응답 파싱 (등급 색출)
-    if "위험" in result_text:
-        card_class = "card-danger"
-        badge_class = "badge-danger"
-        status_text = "위험 (Critical)"
-        icon = "🚨"
-    elif "주의" in result_text:
-        card_class = "card-warning"
-        badge_class = "badge-warning"
-        status_text = "주의 (Warning)"
-        icon = "⚠️"
-    else:
-        card_class = "card-success"
-        badge_class = "badge-success"
-        status_text = "양호 (Good)"
-        icon = "✅"
-
-    # 텍스트 포맷팅 (줄바꿈 처리)
-    formatted_text = result_text.replace("\n", "<br>")
+def render_result_ui(title, result_data, count_msg=""):
+    status = result_data['status']
     
-    # 개수 경고 메시지가 있으면 빨간색으로 강조
-    count_html = f"<div style='color: #d9534f; font-weight: bold; margin-bottom: 10px;'>{count_msg}</div>" if count_msg else ""
+    # 상태별 색상 및 아이콘 설정
+    if "위험" in status:
+        icon = "🚨"
+        header_color = "red"
+        bg_color = "#FFF5F5"
+    elif "주의" in status:
+        icon = "⚠️"
+        header_color = "orange"
+        bg_color = "#FFFDF5"
+    else:
+        icon = "✅"
+        header_color = "green"
+        bg_color = "#F0FDF4"
 
-    # HTML 조립
-    html_code = f"""
-    <div class="report-card {card_class}">
-        <div>
-            <span class="status-badge {badge_class}">{status_text}</span>
-            <span class="card-title">{title}</span>
-        </div>
-        <hr style="margin: 10px 0; border-top: 1px solid #ddd;">
-        {count_html}
-        <div class="content-text">
-            {formatted_text}
-        </div>
-    </div>
-    """
-    st.markdown(html_code, unsafe_allow_html=True)
+    # 컨테이너 박스 생성
+    with st.container(border=True):
+        # 1. 헤더 (아이콘 + 제목 + 등급)
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            st.markdown(f"### {icon} :**{header_color}[{title}]**")
+        with c2:
+            st.markdown(f"**진단결과: :{header_color}[{status}]**")
+        
+        # 2. 개수 경고 메시지 (있을 경우만)
+        if count_msg:
+            st.error(count_msg)
+            
+        # 3. 핵심 요약 (3줄)
+        st.markdown("**📋 핵심 진단**")
+        st.markdown(result_data['summary'])
+        
+        # 4. 제안 (강조 박스)
+        st.info(f"💡 **제안:** {result_data['suggestion']}")
+        
+        # 5. 상세 보기 (클릭해야 열림) - 여기가 요청하신 기능!
+        with st.expander("🔍 상세 분석 사유 보기 (클릭)"):
+            st.write(result_data['detail'])
 
 # --------------------------------------------------------------------------
-# 5. 메인 로직 및 UI
+# 5. 메인 로직
 # --------------------------------------------------------------------------
-# 세션 초기화
 if 'main_count' not in st.session_state: st.session_state.main_count = 1 
 if 'sub_counts' not in st.session_state: st.session_state.sub_counts = {}
 
-st.title("⚖️ AHP 구조 논리 진단 리포트")
-st.markdown("독립성, MECE, 가중치 희석 등을 종합적으로 평가하여 **컨설팅 리포트** 형태로 제공합니다.")
+st.title("⚖️ AHP 논리 진단 리포트 (Smart View)")
+st.caption("복잡한 내용은 숨기고, 핵심만 보여줍니다. 자세한 내용은 클릭해서 확인하세요.")
 st.divider()
 
 if not api_key:
-    st.warning("👈 먼저 왼쪽 사이드바에 Google API Key를 입력해주세요.")
+    st.warning("👈 사이드바에 API Key를 입력해주세요.")
     st.stop()
 
-# [입력 1] 목표 및 1차 기준
+# 입력 1: 목표
 col_goal, _ = st.columns([2, 1])
 with col_goal:
-    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 무기체계 선정")
+    goal = st.text_input("🎯 최종 목표", placeholder="예: 차세대 전차 도입")
 
 if goal:
-    st.subheader("1. 평가 기준 설정")
+    # 입력 2: 기준
+    st.subheader("1. 기준 설정")
     main_criteria = []
-    
-    # 동적 입력창
     for i in range(st.session_state.main_count):
-        col_in, _ = st.columns([4, 1])
-        with col_in:
-            val = st.text_input(f"기준 {i+1}", key=f"main_{i}", placeholder="항목 입력")
-            if val: main_criteria.append(val)
+        val = st.text_input(f"기준 {i+1}", key=f"main_{i}")
+        if val: main_criteria.append(val)
     
     if st.button("➕ 기준 추가"):
         st.session_state.main_count += 1
         st.rerun()
 
-    # [입력 2] 하위 항목 설정
+    # 입력 3: 세부 항목
     structure_data = {}
     if main_criteria:
         st.divider()
-        st.subheader("2. 세부 구조 설계")
-        
+        st.subheader("2. 세부 항목 구성")
         for criterion in main_criteria:
-            with st.expander(f"📂 '{criterion}' 하위 요소", expanded=True):
+            with st.expander(f"📂 '{criterion}' 구성하기", expanded=True):
                 if criterion not in st.session_state.sub_counts:
                     st.session_state.sub_counts[criterion] = 1
                 
@@ -200,37 +175,25 @@ if goal:
                     st.rerun()
                 structure_data[criterion] = sub_items
 
-        # [출력] 진단 리포트
+        # [진단 시작]
         st.divider()
-        st.subheader("📊 진단 결과 리포트")
-        
-        if st.button("🚀 정밀 진단 시작", type="primary", use_container_width=True):
-            with st.spinner("AI 컨설턴트가 보고서를 작성 중입니다..."):
+        if st.button("🚀 AI 정밀 진단 시작", type="primary", use_container_width=True):
+            with st.spinner("AI가 리포트를 생성하고 있습니다..."):
                 
-                # 상단 요약 배너
-                total_sub = sum(len(v) for v in structure_data.values())
-                c1, c2, c3 = st.columns(3)
-                c1.metric("1차 기준", f"{len(main_criteria)}개")
-                c2.metric("세부 항목", f"{total_sub}개")
-                c3.metric("구조 복잡도", "높음" if total_sub > 15 else "적정")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-
-                # 1. 메인 기준 진단
+                # 1차 기준 진단
+                st.subheader("📊 진단 리포트")
                 res_main = analyze_ahp_logic(goal, goal, main_criteria)
-                render_result_card(f"1차 기준: {goal}", res_main['text'])
+                render_result_ui(f"1차 기준: {goal}", res_main)
                 
-                # 2. 세부 항목 진단 Loop
+                # 세부 항목 진단
                 for parent, children in structure_data.items():
-                    # 파이썬 레벨의 개수 경고 메시지 생성
+                    # 개수 경고 체크
                     msg = ""
                     if len(children) >= 8:
-                        msg = f"⚠️ [Guide Check] 하위 항목이 {len(children)}개입니다. 7개 이하로 줄이거나 그룹화(Sub-cluster)가 필요합니다."
+                        msg = f"⚠️ 항목이 {len(children)}개입니다. 7개 이하로 줄이는 것을 권장합니다."
                     elif len(children) == 1:
-                        msg = "⚠️ [Guide Check] 하위 항목이 1개입니다. 상위 기준과 동일하여 분석 의미가 없습니다."
+                        msg = "⚠️ 항목이 1개뿐입니다. 비교가 불가능합니다."
                     
-                    # AI 분석 실행
+                    # AI 분석
                     res = analyze_ahp_logic(goal, parent, children)
-                    
-                    # 카드 출력
-                    render_result_card(f"세부항목: {parent}", res['text'], msg)
+                    render_result_ui(f"세부항목: {parent}", res, msg)
